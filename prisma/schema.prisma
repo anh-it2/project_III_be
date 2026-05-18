@@ -20,6 +20,12 @@ model User {
   messages  Message[]
   // N-1: one User makes many Reactions (back-relation of Reaction.user).
   reactions Reaction[]
+
+  // N-N (self-relation through the Friend join model). Two back-relations
+  // because a Friend row is directional: one names the requester side, the
+  // other the addressee side. The mutual-friends graph = both, status=ACCEPTED.
+  sentFriendRequests     Friend[] @relation("FriendRequester")
+  receivedFriendRequests Friend[] @relation("FriendAddressee")
 }
 
 /// Editable profile detail, 1-1 with User. `name` is NOT here — it stays on
@@ -101,4 +107,39 @@ model Reaction {
 
   @@id([messageId, userId])
   @@index([messageId])
+}
+
+/// Friend request / connection status. REJECT and CANCEL are NOT stored —
+/// they delete the row (no relationship == no row), so the only persisted
+/// states are an outstanding request and an accepted connection.
+enum FriendStatus {
+  PENDING
+  ACCEPTED
+}
+
+/// User<->User friendship, N-N as an explicit self-join. ONE row per pair.
+/// The row is directional only to remember who asked: `requester` sent the
+/// request, `addressee` received it. Friendship itself is symmetric — once
+/// status=ACCEPTED, direction is irrelevant (both are each other's friend).
+///
+/// Lookups between A and B must check BOTH orderings:
+///   WHERE (requesterId=A AND addresseeId=B) OR (requesterId=B AND addresseeId=A)
+/// The app layer also forbids the mirror row, so (A,B) and (B,A) never
+/// coexist. PK (requesterId, addresseeId) blocks a duplicate same-direction
+/// request; the service blocks the reverse duplicate before insert.
+model Friend {
+  requesterId String
+  requester   User   @relation("FriendRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addresseeId String
+  addressee   User   @relation("FriendAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  status FriendStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([requesterId, addresseeId])
+  // "my incoming requests / who are my friends" scans the addressee side.
+  @@index([addresseeId])
+  @@index([status])
 }
