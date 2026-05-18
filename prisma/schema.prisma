@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  // 1-1: a User has at most one Profile (back-relation of Profile.user).
+  profile   Profile?
+  // N-1: one User authors many Messages (back-relation of Message.sender).
+  messages  Message[]
+  // N-1: one User makes many Reactions (back-relation of Reaction.user).
+  reactions Reaction[]
+}
+
+/// Editable profile detail, 1-1 with User. `name` is NOT here — it stays on
+/// User (set at register, used by auth/chat/presence). Every column defaults
+/// to "" so a fresh account reads a complete (empty) profile with no join
+/// surprises. Source of truth for the edit-profile page; the avatar/name
+/// realtime fan-out is a separate concern (socket-server presence).
+model Profile {
+  userId       String  @id
+  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio          String  @default("")
+  location     String  @default("")
+  work         String  @default("")
+  education    String  @default("")
+  relationship String  @default("")
+  avatarUrl    String  @default("")
+  coverUrl     String  @default("")
+
+  updatedAt DateTime @updatedAt
+}
+
+/// Mirrors social-socket-server ChatMessage.type wire values 1:1
+/// ("text|image|file|video|system"). Keep the spellings byte-aligned.
+enum MessageType {
+  text
+  image
+  file
+  video
+  system
+}
+
+/// Chat message. Drop-in target for the social-socket-server in-memory
+/// message.store (clone-chat §7). One row per ChatMessage on the wire.
+model Message {
+  id             String      @id @default(uuid())
+  /// "dm:<a>:<b>" (sorted ids) or "group:<uuid>"
+  conversationId String
+  /// null = system/group-event message (wire senderId "system"); no User row.
+  senderId       String?
+  sender         User?       @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  /// Denormalized author label; required because system messages have no User
+  /// and the socket-server emits senderName on every message.
+  senderName     String
+  content        String
+  type           MessageType @default(text)
+
+  /// Self-relation: the message this one replies to (soft-deleted parents stay
+  /// so the quote still resolves — never hard-delete a replied-to message).
+  replyToId String?
+  replyTo   Message?  @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   Message[] @relation("MessageReply")
+
+  editedAt DateTime?
+  deleted  Boolean   @default(false)
+  /// = socket-server ChatMessage.timestamp; the history pagination cursor.
+  createdAt DateTime @default(now())
+
+  // N-1: one Message has many Reactions (back-relation of Reaction.message).
+  reactions Reaction[]
+
+  // getHistory(conv, cursor, limit): WHERE conversationId = ?
+  //   AND createdAt < cursor ORDER BY createdAt DESC LIMIT n
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+}
+
+/// One reaction. Many Reactions → one Message (N-1), many → one User (N-1).
+/// PK (messageId, userId) = one emoji per user per message; reacting again
+/// upserts (replaces) the row. Cascade-deleted with its Message/User.
+model Reaction {
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Denormalized reactor label (matches MessageReactionDTO.userName).
+  userName  String
+  /// One of: like love haha wow sad angry (validated in the react handler).
+  emoji     String
+
+  @@id([messageId, userId])
+  @@index([messageId])
+}
