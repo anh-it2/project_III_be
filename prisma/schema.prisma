@@ -20,6 +20,16 @@ model User {
   messages  Message[]
   // N-1: one User makes many Reactions (back-relation of Reaction.user).
   reactions Reaction[]
+  // N-1: one User authors many Posts (back-relation of Post.author).
+  posts     Post[]
+  // N-1: one User makes many PostReactions / PostComments.
+  postReactions PostReaction[]
+  postComments  PostComment[]
+
+  // N-1 both sides: notifications I received / notifications I caused
+  // (back-relations of Notification.recipient / Notification.actor).
+  notificationsReceived Notification[] @relation("NotificationRecipient")
+  notificationsSent     Notification[] @relation("NotificationActor")
 
   // N-N (self-relation through the Friend join model). Two back-relations
   // because a Friend row is directional: one names the requester side, the
@@ -142,4 +152,138 @@ model Friend {
   // "my incoming requests / who are my friends" scans the addressee side.
   @@index([addresseeId])
   @@index([status])
+}
+
+/// Notification kind — byte-aligned with the socket-server wire values
+/// (NotificationKind in feature/notification/dto/notification.dto.ts and the
+/// FE project_III mirror). snake_case spellings ARE the strings emitted on
+/// "notification:new"; do not rename in isolation — change all three DTOs +
+/// this enum together or the FE renders an unknown kind.
+enum NotificationKind {
+  like
+  comment
+  share
+  follow
+  mention
+  friend_request
+  friend_accept
+  friend_reject
+}
+
+/// One in-app notification. Written by social-socket-server on
+/// "notification:emit"; replayed on "notification:list" (newest 50, the old
+/// in-memory MAX_PER_USER cap). actorName is denormalized for the same reason
+/// as Message.senderName: the toast/list renders the actor label without a
+/// User join. recipient/actor cascade-delete with their User (a deleted
+/// account leaves no dangling notifications), matching Friend's behaviour.
+model Notification {
+  id          String           @id @default(uuid())
+  recipientId String
+  recipient   User             @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  actorId     String
+  actor       User             @relation("NotificationActor", fields: [actorId], references: [id], onDelete: Cascade)
+  actorName   String
+  kind        NotificationKind
+  postId      String?
+  preview     String?
+  read        Boolean          @default(false)
+  /// = socket-server Notification.timestamp; the list ordering / cap key.
+  createdAt   DateTime         @default(now())
+
+  // "my newest notifications":
+  //   WHERE recipientId = ? ORDER BY createdAt DESC LIMIT 50
+  @@index([recipientId, createdAt])
+}
+
+/// A feed post. Replaces the FE's localStorage `feed:<userId>` + the
+/// hardcoded FEED_POSTS mock. `author` cascade-deletes with its User (a
+/// removed account leaves no orphan posts), matching Notification/Friend.
+///
+/// `feeling` and `sharedFrom` are stored as JSON snapshots (not relations):
+/// the FE shapes (Feeling = {id,emoji,label,kind}, SharedPostRef = a frozen
+/// copy of the shared post) are display-only and never queried by field, so
+/// a column-per-attribute would add schema noise for zero query benefit.
+///
+/// One <kind>Count per FE ReactionId (shared/data/reactions.ts: like, love,
+/// care, haha, wow, sad, angry) — a post has many reactions of mixed kinds,
+/// so a single counter can't represent it. The "likes" label the FE shows is
+/// the sum of all reaction counts. comment/share remain plain counters. No
+/// per-user reaction table yet (counters-only iteration); a future
+/// PostReaction table can backfill these.
+model Post {
+  id        String  @id @default(uuid())
+  authorId  String
+  author    User    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  text      String  @default("")
+  imageUrl  String?
+  videoUrl  String?
+  /// FE Feeling snapshot: { id, emoji, label, kind } | null.
+  feeling   Json?
+  isLive    Boolean @default(false)
+
+  // Per-reaction-kind counters (FE ReactionId). Sum = the "likes" label.
+  likeCount  Int @default(0)
+  loveCount  Int @default(0)
+  careCount  Int @default(0)
+  hahaCount  Int @default(0)
+  wowCount   Int @default(0)
+  sadCount   Int @default(0)
+  angryCount Int @default(0)
+
+  commentsCount Int @default(0)
+  sharesCount   Int @default(0)
+
+  /// FE SharedPostRef snapshot (frozen copy of the reshared post) | null.
+  sharedFrom Json?
+
+  /// Set = pinned; the feed sorts pinned-desc first, then createdAt-desc.
+  pinnedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // N-1: one Post has many reactions / comments.
+  reactions PostReaction[]
+  comments  PostComment[]
+
+  // Feed page: ORDER BY pinnedAt DESC NULLS LAST, createdAt DESC.
+  // "my posts": WHERE authorId = ? (profile/photos/stats).
+  @@index([createdAt])
+  @@index([authorId, createdAt])
+}
+
+/// One reaction per user per post (PK [postId,userId]); reacting again
+/// upserts (swaps emoji). `emoji` is a FE ReactionId
+/// (like|love|care|haha|wow|sad|angry, validated in the react handler).
+/// The Post.<kind>Count columns are the denormalized totals, maintained in
+/// the SAME $transaction as the row write so feed reads need no aggregation;
+/// this table is the source of truth + powers "my reaction". Cascade-deleted
+/// with its Post/User (mirrors message Reaction).
+model PostReaction {
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji     String
+  createdAt DateTime @default(now())
+
+  @@id([postId, userId])
+  @@index([postId])
+}
+
+/// A comment on a post. author name/avatar read live via the User/Profile
+/// join (same trade-off as Post). Post.commentsCount is the denormalized
+/// total, maintained in the same $transaction as the insert. Cascade-deleted
+/// with its Post/User.
+model PostComment {
+  id        String   @id @default(uuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  text      String   @default("")
+  imageUrl  String?
+  createdAt DateTime @default(now())
+
+  // "post comments oldest→newest": WHERE postId = ? ORDER BY createdAt ASC
+  @@index([postId, createdAt])
 }
