@@ -93,12 +93,44 @@ export const postStore = {
     });
   },
 
-  /** Global feed: pinned first (newest pin), then newest-created. */
-  listFeed(viewerId: string): Promise<PostRow[]> {
-    return prisma.post.findMany({
-      orderBy: [{ pinnedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
-      take: FEED_LIMIT,
-      include: postInclude(viewerId),
+  /**
+   * Global feed: pinned first (newest pin), then friends' (and the viewer's
+   * own) posts before strangers', newest-created within each group.
+   *
+   * Prisma's `orderBy` can't express "friend-first" (it depends on the
+   * viewer's friend set), so we order pinned/newest in the DB then do a
+   * stable reorder by friend-rank in app code. The fetched window is the
+   * same newest-N as before, so no extra rows are dropped vs. the old order.
+   */
+  async listFeed(viewerId: string): Promise<PostRow[]> {
+    const [rows, friendRows] = await Promise.all([
+      prisma.post.findMany({
+        orderBy: [{ pinnedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+        take: FEED_LIMIT,
+        include: postInclude(viewerId),
+      }),
+      prisma.friend.findMany({
+        where: {
+          status: 'ACCEPTED',
+          OR: [{ requesterId: viewerId }, { addresseeId: viewerId }],
+        },
+        select: { requesterId: true, addresseeId: true },
+      }),
+    ]);
+
+    const friendIds = new Set<string>();
+    for (const f of friendRows) {
+      friendIds.add(f.requesterId === viewerId ? f.addresseeId : f.requesterId);
+    }
+
+    // 0 = own/friend, 1 = stranger. Array.prototype.sort is stable, so the
+    // DB pinned/newest order is preserved within each rank.
+    const rank = (r: PostRow) =>
+      r.authorId === viewerId || friendIds.has(r.authorId) ? 0 : 1;
+
+    return rows.sort((a, b) => {
+      const pinDelta = (a.pinnedAt ? 0 : 1) - (b.pinnedAt ? 0 : 1);
+      return pinDelta !== 0 ? pinDelta : rank(a) - rank(b);
     });
   },
 
