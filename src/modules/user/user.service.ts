@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { Prisma } from '@prisma/client';
 import {
   userStore,
   profileStore,
@@ -21,18 +22,50 @@ const EMPTY_PROFILE_FIELDS: ProfileFields = {
   coverUrl: '',
 };
 
+/**
+ * The findByName/findByEmail pre-checks below close the common case, but a
+ * concurrent insert can still land between check and write. The DB unique
+ * indexes (User_email_key, User_name_key) are the real guarantee; translate
+ * their violation into the same 409 the pre-check would have produced.
+ * `meta.target` is either the column names or the index name depending on the
+ * connector/version, so substring-match both.
+ */
+function rethrowUniqueAsConflict(err: unknown): never {
+  if (
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    err.code === 'P2002'
+  ) {
+    const target = String(err.meta?.target ?? '');
+    if (target.includes('email')) {
+      throw ApiError.conflict('Email already registered');
+    }
+    if (target.includes('name')) {
+      throw ApiError.conflict('Username already taken');
+    }
+    throw ApiError.conflict('Already exists');
+  }
+  throw err;
+}
+
 export const userService = {
   async create(input: CreateUserInput): Promise<PublicUser> {
     if (await userStore.findByEmail(input.email)) {
       throw ApiError.conflict('Email already registered');
     }
+    if (await userStore.findByName(input.name)) {
+      throw ApiError.conflict('Username already taken');
+    }
     const passwordHash = await bcrypt.hash(input.password, 10);
-    const user = await userStore.create({
-      name: input.name,
-      email: input.email,
-      passwordHash,
-    });
-    return toPublicUser(user);
+    try {
+      const user = await userStore.create({
+        name: input.name,
+        email: input.email,
+        passwordHash,
+      });
+      return toPublicUser(user);
+    } catch (err) {
+      rethrowUniqueAsConflict(err);
+    }
   },
 
   async getById(id: string): Promise<PublicUser> {
@@ -74,6 +107,13 @@ export const userService = {
     const user = await userStore.findById(userId);
     if (!user) throw ApiError.notFound('User not found');
     const { name, ...fields } = input;
-    return profileStore.replaceForUser(userId, name, fields);
+    if (await userStore.findByName(name, userId)) {
+      throw ApiError.conflict('Username already taken');
+    }
+    try {
+      return await profileStore.replaceForUser(userId, name, fields);
+    } catch (err) {
+      rethrowUniqueAsConflict(err);
+    }
   },
 };

@@ -57,6 +57,16 @@ export const userStore = {
   findByEmail(email: string): Promise<UserRecord | null> {
     return prisma.user.findUnique({ where: { email } });
   },
+  /**
+   * Name has no DB unique constraint, so this is a findFirst, not findUnique.
+   * `exceptId` lets edit-profile ignore the caller's own row (re-saving the
+   * same name must not collide with itself).
+   */
+  findByName(name: string, exceptId?: string): Promise<UserRecord | null> {
+    return prisma.user.findFirst({
+      where: { name, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    });
+  },
   list(): Promise<UserRecord[]> {
     return prisma.user.findMany({ orderBy: { createdAt: 'desc' } });
   },
