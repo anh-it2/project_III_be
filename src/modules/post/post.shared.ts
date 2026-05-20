@@ -20,10 +20,12 @@ export const AUTHOR_SELECT = {
 
 // `reactions` is filtered to the viewer at query time (the WHERE is added
 // per-request by postInclude); the type only needs the shape, so the static
-// include here omits the filter.
+// include here omits the filter. `hashtags` always pulled — small list per
+// post, used by toPostDTO to set `tags`.
 const POST_INCLUDE = {
   author: AUTHOR_SELECT,
   reactions: { select: { emoji: true } },
+  hashtags: { include: { hashtag: { select: { tag: true } } } },
 } as const;
 
 export type PostRow = Prisma.PostGetPayload<{ include: typeof POST_INCLUDE }>;
@@ -33,6 +35,7 @@ export function postInclude(viewerId: string) {
   return {
     author: AUTHOR_SELECT,
     reactions: { where: { userId: viewerId }, select: { emoji: true } },
+    hashtags: { include: { hashtag: { select: { tag: true } } } },
   };
 }
 

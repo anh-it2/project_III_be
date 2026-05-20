@@ -1,4 +1,6 @@
 import { prisma } from '../../config/prisma.js';
+import { hashtagStore } from '../hashtag/hashtag.model.js';
+import { extractHashtags } from '../hashtag/hashtag.parse.js';
 import { jsonWrite, postInclude, type PostRow } from './post.shared.js';
 import type { CreatePostInput, UpdatePostInput } from './post.validation.js';
 
@@ -45,6 +47,9 @@ export interface PostDTO {
   sharedFrom: Record<string, unknown> | null;
   pinnedAt: number | null;
   createdAt: number;
+  // Hashtags extracted from `text` at create/update time, lowercased + deduped.
+  // Drives the trending sidebar + /hashtag/[tag] landing page on the FE.
+  tags: string[];
 }
 
 export function toPostDTO(row: PostRow): PostDTO {
@@ -73,23 +78,46 @@ export function toPostDTO(row: PostRow): PostDTO {
     sharedFrom: (row.sharedFrom as Record<string, unknown> | null) ?? null,
     pinnedAt: row.pinnedAt ? row.pinnedAt.getTime() : null,
     createdAt: row.createdAt.getTime(),
+    tags: row.hashtags.map((h) => h.hashtag.tag),
   };
 }
 
 /** Post CRUD + feed reads. Reactions/comments live in their own stores. */
 export const postStore = {
-  createForAuthor(authorId: string, input: CreatePostInput): Promise<PostRow> {
-    return prisma.post.create({
-      data: {
-        authorId,
-        text: input.text,
-        imageUrl: input.imageUrl ?? null,
-        videoUrl: input.videoUrl ?? null,
-        feeling: jsonWrite(input.feeling ?? null),
-        isLive: input.isLive ?? false,
-        sharedFrom: jsonWrite(input.sharedFrom ?? null),
-      },
-      include: postInclude(authorId),
+  // Wrapped in $transaction so hashtag extraction + PostHashtag inserts +
+  // Hashtag.usageCount increment are atomic with the post create — a crash
+  // mid-tag-insert never leaves a post with partial tags.
+  async createForAuthor(
+    authorId: string,
+    input: CreatePostInput,
+  ): Promise<PostRow> {
+    return prisma.$transaction(async (tx) => {
+      const created = await tx.post.create({
+        data: {
+          authorId,
+          text: input.text,
+          imageUrl: input.imageUrl ?? null,
+          videoUrl: input.videoUrl ?? null,
+          feeling: jsonWrite(input.feeling ?? null),
+          isLive: input.isLive ?? false,
+          sharedFrom: jsonWrite(input.sharedFrom ?? null),
+        },
+        select: { id: true },
+      });
+      await hashtagStore.applyTagDiff(
+        tx,
+        created.id,
+        [],
+        extractHashtags(input.text),
+      );
+      // Re-fetch with the full viewer-scoped include now that hashtags exist.
+      const row = await tx.post.findUnique({
+        where: { id: created.id },
+        include: postInclude(authorId),
+      });
+      // Guaranteed by the create+findUnique on the same tx; satisfies TS.
+      if (!row) throw new Error('Post create failed');
+      return row;
     });
   },
 
@@ -159,20 +187,38 @@ export const postStore = {
     });
   },
 
-  update(
+  async update(
     id: string,
     viewerId: string,
     input: UpdatePostInput,
   ): Promise<PostRow> {
-    return prisma.post.update({
-      where: { id },
-      data: {
-        text: input.text,
-        imageUrl: input.imageUrl ?? null,
-        videoUrl: input.videoUrl ?? null,
-        feeling: jsonWrite(input.feeling ?? null),
-      },
-      include: postInclude(viewerId),
+    return prisma.$transaction(async (tx) => {
+      const before = await tx.post.findUnique({
+        where: { id },
+        select: { text: true },
+      });
+      await tx.post.update({
+        where: { id },
+        data: {
+          text: input.text,
+          imageUrl: input.imageUrl ?? null,
+          videoUrl: input.videoUrl ?? null,
+          feeling: jsonWrite(input.feeling ?? null),
+        },
+        select: { id: true },
+      });
+      await hashtagStore.applyTagDiff(
+        tx,
+        id,
+        extractHashtags(before?.text),
+        extractHashtags(input.text),
+      );
+      const row = await tx.post.findUnique({
+        where: { id },
+        include: postInclude(viewerId),
+      });
+      if (!row) throw new Error('Post update failed');
+      return row;
     });
   },
 
@@ -184,7 +230,21 @@ export const postStore = {
     });
   },
 
-  delete(id: string): Promise<unknown> {
-    return prisma.post.delete({ where: { id } });
+  // PostHashtag rows cascade with the post, but that wouldn't update
+  // Hashtag.usageCount — do the diff explicitly first, then drop the post.
+  async delete(id: string): Promise<void> {
+    await prisma.$transaction(async (tx) => {
+      const row = await tx.post.findUnique({
+        where: { id },
+        select: { text: true },
+      });
+      await hashtagStore.applyTagDiff(
+        tx,
+        id,
+        extractHashtags(row?.text),
+        [],
+      );
+      await tx.post.delete({ where: { id } });
+    });
   },
 };

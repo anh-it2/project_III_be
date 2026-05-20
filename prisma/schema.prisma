@@ -244,6 +244,8 @@ model Post {
   // N-1: one Post has many reactions / comments.
   reactions PostReaction[]
   comments  PostComment[]
+  // N-N: Post <-> Hashtag through PostHashtag.
+  hashtags  PostHashtag[]
 
   // Feed page: ORDER BY pinnedAt DESC NULLS LAST, createdAt DESC.
   // "my posts": WHERE authorId = ? (profile/photos/stats).
@@ -286,4 +288,33 @@ model PostComment {
 
   // "post comments oldest→newest": WHERE postId = ? ORDER BY createdAt ASC
   @@index([postId, createdAt])
+}
+
+/// Persisted hashtag dictionary. `tag` = normalized form (lowercased, no
+/// leading #). `usageCount` denormalized = number of PostHashtag rows,
+/// maintained in same $transaction as join writes so the trending query
+/// needs no aggregation. Rows never deleted — usageCount=0 just drops out
+/// of trending. See post.model.ts applyTagDiff for the lifecycle.
+model Hashtag {
+  id         String   @id @default(uuid())
+  tag        String   @unique
+  usageCount Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  posts PostHashtag[]
+
+  @@index([usageCount])
+}
+
+/// N-N join Post <-> Hashtag. Cascade-deleted with its Post so deleting a
+/// post drops its joins; Hashtag.usageCount is decremented explicitly in
+/// the same $transaction (cascade alone wouldn't update the counter).
+model PostHashtag {
+  postId    String
+  post      Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  hashtagId String
+  hashtag   Hashtag @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, hashtagId])
+  @@index([hashtagId])
 }
