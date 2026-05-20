@@ -34,6 +34,12 @@ export const postService = {
     return (await postStore.listFeed(viewerId)).map(toPostDTO);
   },
 
+  async getById(postId: string, viewerId: string): Promise<PostDTO> {
+    const row = await postStore.findById(postId, viewerId);
+    if (!row) throw ApiError.notFound('Post not found');
+    return toPostDTO(row);
+  },
+
   async listByAuthor(
     authorId: string,
     viewerId: string,

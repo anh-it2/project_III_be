@@ -26,6 +26,13 @@ export const postController = {
     res.json({ success: true, data: await postService.listFeed(viewerId) });
   },
 
+  async getOne(req: Request, res: Response) {
+    res.json({
+      success: true,
+      data: await postService.getById(req.params.id, req.user!.sub),
+    });
+  },
+
   async create(req: Request, res: Response) {
     const post = await postService.create(req.user!.sub, req.body);
     res.status(201).json({ success: true, data: post });

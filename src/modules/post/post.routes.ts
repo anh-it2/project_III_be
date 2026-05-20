@@ -24,6 +24,7 @@ router.post('/', validateBody(createPostSchema), catchAsync(postController.creat
 // multer parses multipart itself (bypasses express.json's 5mb limit).
 router.post('/upload', singleMedia, catchAsync(postController.uploadMedia));
 
+router.get('/:id', catchAsync(postController.getOne));
 router.patch('/:id', validateBody(updatePostSchema), catchAsync(postController.update));
 router.post('/:id/pin', validateBody(pinPostSchema), catchAsync(postController.pin));
 router.delete('/:id', catchAsync(postController.remove));
