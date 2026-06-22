@@ -20,6 +20,18 @@ export const env = {
   // The FE renders these directly, so it must be reachable from the client,
   // not an internal hostname. Override per env with PUBLIC_BASE_URL.
   publicBaseUrl: process.env.PUBLIC_BASE_URL ?? `http://localhost:${PORT}`,
+  // MinIO object storage for post media. publicUrl must be browser-reachable
+  // (CDN / proxy domain in prod), NOT an internal docker hostname — the FE
+  // loads media directly from it via <img src>.
+  minio: {
+    endPoint: process.env.MINIO_ENDPOINT ?? 'localhost',
+    port: Number(process.env.MINIO_PORT ?? 9000),
+    useSSL: process.env.MINIO_USE_SSL === 'true',
+    accessKey: required('MINIO_ACCESS_KEY', 'minioadmin'),
+    secretKey: required('MINIO_SECRET_KEY', 'minioadmin'),
+    bucket: process.env.MINIO_BUCKET ?? 'post-media',
+    publicUrl: process.env.MINIO_PUBLIC_URL ?? 'http://localhost:9000',
+  },
   get isProd() {
     return this.nodeEnv === 'production';
   },

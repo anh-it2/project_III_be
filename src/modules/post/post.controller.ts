@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import { postService } from './post.service.js';
 import { env } from '../../config/env.js';
+import { minioClient, BUCKET } from '../../config/minio.js';
+import { objectName } from './post.upload.js';
 
 export const postController = {
   /**
@@ -96,8 +98,9 @@ export const postController = {
   },
 
   /**
-   * Multer has already streamed the file to disk; `req.file` is set by the
-   * upload route. Return the absolute public URL the browser embeds.
+   * Multer buffered the file in memory; `req.file` is set by the upload route.
+   * Stream it to MinIO and return the permanent public URL the browser embeds
+   * (this URL is what the FE persists on the post).
    */
   async uploadMedia(req: Request, res: Response) {
     const file = req.file;
@@ -106,9 +109,13 @@ export const postController = {
         .status(400)
         .json({ success: false, message: 'No file uploaded' });
     }
+    const name = objectName(file.originalname);
+    await minioClient.putObject(BUCKET, name, file.buffer, file.size, {
+      'Content-Type': file.mimetype,
+    });
     res.status(201).json({
       success: true,
-      data: { url: `${env.publicBaseUrl}/uploads/${file.filename}` },
+      data: { url: `${env.minio.publicUrl}/${BUCKET}/${name}` },
     });
   },
 };

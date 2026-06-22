@@ -2,24 +2,15 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 import type { Request, Response, NextFunction } from 'express';
 import multer, { MulterError } from 'multer';
-import { UPLOAD_DIR } from '../../config/uploads.js';
 import { ApiError } from '../../utils/api-error.js';
 
 // Images up to ~5MB and videos up to ~50MB in the FE composer; cap at 50MB.
 const MAX_BYTES = 50 * 1024 * 1024;
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  // Random name + original extension. Never trust the client filename for
-  // the on-disk name (path traversal / collisions).
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase().slice(0, 10);
-    cb(null, `${randomUUID()}${ext}`);
-  },
-});
-
+// Keep the file in memory; the controller streams the buffer to MinIO.
+// One small file (<=50MB) per request, so RAM use is bounded.
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
     const ok =
@@ -28,6 +19,15 @@ const upload = multer({
     cb(new Error('Only image or video files allowed'));
   },
 });
+
+/**
+ * Random object name + original extension. Never trust the client filename
+ * for the stored name (path traversal / collisions).
+ */
+export function objectName(originalname: string): string {
+  const ext = path.extname(originalname).toLowerCase().slice(0, 10);
+  return `${randomUUID()}${ext}`;
+}
 
 /**
  * `upload.single('file')` wrapped so multer's own errors (too large, wrong

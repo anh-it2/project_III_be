@@ -1,8 +1,12 @@
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { prisma } from './config/prisma.js';
+import { ensureBucket } from './config/minio.js';
 
 const app = createApp();
+
+// Create the MinIO media bucket (and its public-read policy) before serving.
+await ensureBucket();
 
 const server = app.listen(env.port, () => {
   console.log(`[server] listening on http://localhost:${env.port} (${env.nodeEnv})`);
