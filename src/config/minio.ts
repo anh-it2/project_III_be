@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+import path from 'path';
 import { Client } from 'minio';
 import { env } from './env.js';
 
@@ -30,6 +32,29 @@ const publicReadPolicy = (bucket: string) =>
       },
     ],
   });
+
+/** The minimal slice of a multer file this store needs to persist an object. */
+export interface StorableFile {
+  originalname: string;
+  buffer: Buffer;
+  size: number;
+  mimetype: string;
+}
+
+/**
+ * Stream a buffered upload into the bucket and return its public URL. The
+ * object name is a random UUID + the original extension — never the client
+ * filename (path traversal / collisions). URL is built from the public MinIO
+ * host, so it's safe to persist and load directly via <img src>.
+ */
+export async function storeObject(file: StorableFile): Promise<string> {
+  const ext = path.extname(file.originalname).toLowerCase().slice(0, 10);
+  const name = `${randomUUID()}${ext}`;
+  await minioClient.putObject(BUCKET, name, file.buffer, file.size, {
+    'Content-Type': file.mimetype,
+  });
+  return `${env.minio.publicUrl}/${BUCKET}/${name}`;
+}
 
 /** Create the bucket once at boot and make it public-read. */
 export async function ensureBucket(): Promise<void> {

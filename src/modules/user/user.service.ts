@@ -11,6 +11,7 @@ import {
 } from './user.model.js';
 import type { CreateUserInput, UpdateProfileInput } from './user.validation.js';
 import { ApiError } from '../../utils/api-error.js';
+import { storeObject, type StorableFile } from '../../config/minio.js';
 
 const EMPTY_PROFILE_FIELDS: ProfileFields = {
   bio: '',
@@ -94,6 +95,24 @@ export const userService = {
     if (!user) throw ApiError.notFound('User not found');
     const profile = await profileStore.getByUserId(userId);
     return { name: user.name, ...(profile ?? EMPTY_PROFILE_FIELDS) };
+  },
+
+  /**
+   * Upload one profile image (avatar or cover) to MinIO and persist its URL
+   * on the Profile immediately, so it sticks even if the user never re-saves
+   * the full edit-profile form. Returns the public URL.
+   */
+  async setProfileImage(
+    userId: string,
+    field: 'avatarUrl' | 'coverUrl',
+    file?: StorableFile,
+  ): Promise<string> {
+    if (!file) throw ApiError.badRequest('No image uploaded');
+    const user = await userStore.findById(userId);
+    if (!user) throw ApiError.notFound('User not found');
+    const url = await storeObject(file);
+    await profileStore.setImage(userId, field, url);
+    return url;
   },
 
   /**

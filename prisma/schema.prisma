@@ -7,11 +7,17 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  USER
+  ADMIN
+}
+
 model User {
   id           String   @id @default(uuid())
   name         String   @unique
   email        String   @unique
   passwordHash String
+  role         Role     @default(USER)
   createdAt    DateTime @default(now())
 
   // 1-1: a User has at most one Profile (back-relation of Profile.user).
@@ -22,6 +28,8 @@ model User {
   reactions Reaction[]
   // N-1: one User authors many Posts (back-relation of Post.author).
   posts     Post[]
+  // N-1: one User authors many Stories (back-relation of Story.author).
+  stories   Story[]
   // N-1: one User makes many PostReactions / PostComments.
   postReactions PostReaction[]
   postComments  PostComment[]
@@ -55,6 +63,34 @@ model Profile {
   coverUrl     String  @default("")
 
   updatedAt DateTime @updatedAt
+}
+
+/// Story media kind. Lowercase spellings match the FE wire values
+/// ("image"|"video") exactly, so no mapping is needed in toStoryDTO.
+enum StoryMediaType {
+  image
+  video
+}
+
+/// Ephemeral 24h story. Its own table (not a Post variant) so it never leaks
+/// into the post feed. `expiresAt` is written at create time (createdAt + 24h)
+/// and the list query filters `expiresAt > now` — rows are kept, just hidden
+/// once stale. Author name/avatar are read live via the `author` relation,
+/// never denormalized (same convention as Post).
+model Story {
+  id        String         @id @default(uuid())
+  authorId  String
+  author    User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  mediaUrl  String         @db.VarChar(2048)
+  mediaType StoryMediaType
+  caption   String?        @db.VarChar(300)
+  musicId   String?        @db.VarChar(100)
+  createdAt DateTime       @default(now())
+  expiresAt DateTime
+
+  // List page: WHERE expiresAt > now ORDER BY createdAt DESC.
+  @@index([expiresAt])
+  @@index([authorId, createdAt])
 }
 
 /// Mirrors social-socket-server ChatMessage.type wire values 1:1
@@ -168,6 +204,9 @@ enum NotificationKind {
   friend_request
   friend_accept
   friend_reject
+  report_submitted
+  report_approved
+  report_rejected
 }
 
 /// One in-app notification. Written by social-socket-server on

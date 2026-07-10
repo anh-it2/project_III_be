@@ -7,9 +7,11 @@ import { userService } from '../user/user.service.js';
 import { toPublicUser, type PublicUser } from '../user/user.model.js';
 import type { LoginInput, RegisterInput } from './auth.validation.js';
 
-function issueToken(user: { id: string; email: string }): string {
+import type { Role } from '@prisma/client';
+
+function issueToken(user: { id: string; email: string; role: Role }): string {
   return jwt.sign(
-    { sub: user.id, email: user.email },
+    { sub: user.id, email: user.email, role: user.role },
     env.jwtSecret,
     { expiresIn: env.jwtExpiresIn } as SignOptions,
   );

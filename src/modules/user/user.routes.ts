@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { userController } from './user.controller.js';
 import { createUserSchema, updateProfileSchema } from './user.validation.js';
 import { validateBody } from '../../middleware/validate.middleware.js';
+import { singleImage } from '../../middleware/upload.middleware.js';
 import { catchAsync } from '../../utils/catch-async.js';
 import { requireAuth } from '../../middleware/auth.middleware.js';
 
@@ -17,6 +18,20 @@ router.patch(
   requireAuth,
   validateBody(updateProfileSchema),
   catchAsync(userController.updateMyProfile),
+);
+// Multipart image uploads (multer parses the body, bypassing express.json).
+// Static '/me/*' segments stay before '/:id' so they're not read as an :id.
+router.patch(
+  '/me/avatar',
+  requireAuth,
+  singleImage,
+  catchAsync(userController.updateMyAvatar),
+);
+router.patch(
+  '/me/cover',
+  requireAuth,
+  singleImage,
+  catchAsync(userController.updateMyCover),
 );
 router.get('/:id', catchAsync(userController.getById));
 

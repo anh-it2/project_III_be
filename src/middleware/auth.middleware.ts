@@ -2,10 +2,12 @@ import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
 import { ApiError } from '../utils/api-error.js';
+import type { Role } from '@prisma/client';
 
 export interface AuthPayload {
   sub: string;
   email: string;
+  role: Role;
 }
 
 declare global {

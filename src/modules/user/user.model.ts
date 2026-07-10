@@ -1,4 +1,5 @@
 import { prisma } from '../../config/prisma.js';
+import type { Role } from '@prisma/client';
 
 /** Stored shape (includes the password hash — never serialize this directly). */
 export interface UserRecord {
@@ -6,6 +7,7 @@ export interface UserRecord {
   name: string;
   email: string;
   passwordHash: string;
+  role: Role;
   createdAt: Date;
 }
 
@@ -48,7 +50,9 @@ const PROFILE_SELECT = {
  * database takes time. Controllers/services must `await` these.
  */
 export const userStore = {
-  create(data: Omit<UserRecord, 'id' | 'createdAt'>): Promise<UserRecord> {
+  // role omitted from the input: new users default to USER (schema @default).
+  // An admin is promoted out-of-band (DB update), never at registration.
+  create(data: Omit<UserRecord, 'id' | 'createdAt' | 'role'>): Promise<UserRecord> {
     return prisma.user.create({ data });
   },
   findById(id: string): Promise<UserRecord | null> {
@@ -83,6 +87,24 @@ export const profileStore = {
     return prisma.profile.findUnique({
       where: { userId },
       select: PROFILE_SELECT,
+    });
+  },
+
+  /**
+   * Set a single image column (avatarUrl/coverUrl) without touching the rest
+   * of the profile. Upsert because a user who never saved a profile has no
+   * Profile row yet — the other columns fall back to their schema defaults.
+   */
+  async setImage(
+    userId: string,
+    field: 'avatarUrl' | 'coverUrl',
+    url: string,
+  ): Promise<void> {
+    const data = { [field]: url };
+    await prisma.profile.upsert({
+      where: { userId },
+      create: { userId, ...data },
+      update: data,
     });
   },
 

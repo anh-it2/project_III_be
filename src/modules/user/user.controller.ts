@@ -32,4 +32,22 @@ export const userController = {
       data: await userService.updateMyProfile(req.user!.sub, req.body),
     });
   },
+
+  async updateMyAvatar(req: Request, res: Response) {
+    const avatarUrl = await userService.setProfileImage(
+      req.user!.sub,
+      'avatarUrl',
+      req.file,
+    );
+    res.json({ success: true, data: { avatarUrl } });
+  },
+
+  async updateMyCover(req: Request, res: Response) {
+    const coverUrl = await userService.setProfileImage(
+      req.user!.sub,
+      'coverUrl',
+      req.file,
+    );
+    res.json({ success: true, data: { coverUrl } });
+  },
 };
