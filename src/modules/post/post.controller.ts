@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { postService } from './post.service.js';
 import { env } from '../../config/env.js';
-import { minioClient, BUCKET } from '../../config/minio.js';
+import { BUCKET, putObjectEnsured } from '../../config/minio.js';
 import { objectName } from './post.upload.js';
 
 export const postController = {
@@ -110,9 +110,7 @@ export const postController = {
         .json({ success: false, message: 'No file uploaded' });
     }
     const name = objectName(file.originalname);
-    await minioClient.putObject(BUCKET, name, file.buffer, file.size, {
-      'Content-Type': file.mimetype,
-    });
+    await putObjectEnsured(name, file);
     res.status(201).json({
       success: true,
       data: { url: `${env.minio.publicUrl}/${BUCKET}/${name}` },

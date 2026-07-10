@@ -41,6 +41,37 @@ export interface StorableFile {
   mimetype: string;
 }
 
+/** True for the MinIO/S3 "bucket is gone" error, whatever surface it takes. */
+function isNoSuchBucket(err: unknown): boolean {
+  const e = err as { code?: string; message?: string };
+  return (
+    e?.code === 'NoSuchBucket' ||
+    /bucket does not exist|no such bucket/i.test(e?.message ?? '')
+  );
+}
+
+/**
+ * putObject that self-heals a missing bucket. Hosted MinIO with ephemeral
+ * storage can lose the bucket after boot (a MinIO restart wipes it) while
+ * this BE process keeps running — so the boot-time ensureBucket() no longer
+ * covers it and every upload fails with "The specified bucket does not
+ * exist" until the BE is restarted. On that error we recreate the bucket
+ * (+ public-read policy) and retry the upload once.
+ */
+export async function putObjectEnsured(
+  name: string,
+  file: StorableFile,
+): Promise<void> {
+  const meta = { 'Content-Type': file.mimetype };
+  try {
+    await minioClient.putObject(BUCKET, name, file.buffer, file.size, meta);
+  } catch (err) {
+    if (!isNoSuchBucket(err)) throw err;
+    await ensureBucket();
+    await minioClient.putObject(BUCKET, name, file.buffer, file.size, meta);
+  }
+}
+
 /**
  * Stream a buffered upload into the bucket and return its public URL. The
  * object name is a random UUID + the original extension — never the client
@@ -50,9 +81,7 @@ export interface StorableFile {
 export async function storeObject(file: StorableFile): Promise<string> {
   const ext = path.extname(file.originalname).toLowerCase().slice(0, 10);
   const name = `${randomUUID()}${ext}`;
-  await minioClient.putObject(BUCKET, name, file.buffer, file.size, {
-    'Content-Type': file.mimetype,
-  });
+  await putObjectEnsured(name, file);
   return `${env.minio.publicUrl}/${BUCKET}/${name}`;
 }
 
